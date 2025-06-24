@@ -6,9 +6,8 @@ import pymorphy3
 from nltk.tokenize import RegexpTokenizer
 from nltk.corpus import stopwords
 import streamlit as st
-from stqdm import stqdm  # tqdm для Streamlit
+from stqdm import stqdm
 
-# Класс BM25 для русского языка
 class BM25Russian:
     def __init__(self, k1=1.5, b=0.75):
         self.k1 = k1
@@ -87,9 +86,19 @@ class BM25Russian:
             score = self.get_score(query_terms, doc_index)
             scores.append((doc_index, score))
 
-        scores.sort(key=lambda x: x[1], reverse=True)
-        return scores[:top_n]
+        if not scores or all(score == 0 for _, score in scores):
+            return scores[:top_n]
 
+        log_scores = [(doc_idx, math.log1p(score)) for doc_idx, score in scores]
+
+        max_log_score = max(score for _, score in log_scores)
+        if max_log_score <= 0:
+            return scores[:top_n]
+
+        normalized_scores = [(doc_idx, score / max_log_score) for doc_idx, score in log_scores]
+
+        normalized_scores.sort(key=lambda x: x[1], reverse=True)
+        return normalized_scores[:top_n]
 
 def load_documents_from_folder(folder_path: str) -> List[Tuple[str, str]]:
     documents = []

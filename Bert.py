@@ -17,15 +17,13 @@ class RuBERTWrapper:
         self.doc_embeddings = None
         self.documents_info = None
 
-    def _mean_pooling(self, model_output, attention_mask):
+    def mean_pooling(self, model_output, attention_mask):
         token_embeddings = model_output.last_hidden_state
         input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
         return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
-    def _encode_long_text(self, text):
-        """Кодирование длинных текстов с разбиением на части"""
-        # Разбиваем текст на предложения или части
-        parts = self._split_text(text)
+    def encode_long_text(self, text):
+        parts = self.split_text(text)
         part_embeddings = []
 
         for part in parts:
@@ -33,14 +31,12 @@ class RuBERTWrapper:
                                     max_length=512, return_tensors='pt').to(self.device)
             with torch.no_grad():
                 outputs = self.model(**inputs)
-                embedding = self._mean_pooling(outputs, inputs['attention_mask'])
+                embedding = self.mean_pooling(outputs, inputs['attention_mask'])
                 part_embeddings.append(embedding.cpu().numpy())
 
-        # Усредняем эмбеддинги всех частей
         return np.mean(part_embeddings, axis=0)
 
-    def _split_text(self, text, max_length=500):
-        """Разбивает текст на части по предложениям или по длине"""
+    def split_text(self, text, max_length=500):
         sentences = text.split('.')
         parts = []
         current_part = ""
@@ -59,46 +55,41 @@ class RuBERTWrapper:
         return parts
 
     def index_documents(self, documents):
-        """Индексация документов с обработкой длинных текстов"""
         texts = [doc[1] for doc in documents]
         embeddings = []
 
         for text in stqdm(texts, desc="Индексация документов"):
             if len(self.tokenizer.tokenize(text)) > 500:  # Примерный порог для длинных документов
-                embedding = self._encode_long_text(text)
+                embedding = self.encode_long_text(text)
             else:
                 inputs = self.tokenizer(text, padding=True, truncation=True,
                                         max_length=512, return_tensors='pt').to(self.device)
                 with torch.no_grad():
                     outputs = self.model(**inputs)
-                    embedding = self._mean_pooling(outputs, inputs['attention_mask']).cpu().numpy()
+                    embedding = self.mean_pooling(outputs, inputs['attention_mask']).cpu().numpy()
             embeddings.append(embedding)
 
         self.doc_embeddings = np.vstack(embeddings)
         self.documents_info = documents
 
-    def search(self, query, top_n=10):
+    def search(self, query, top_n=20):
         if self.doc_embeddings is None:
             raise ValueError("Документы не индексированы!")
 
-        # Кодирование запроса (может быть длинным)
         if len(self.tokenizer.tokenize(query)) > 500:
-            query_embedding = self._encode_long_text(query)
+            query_embedding = self.encode_long_text(query)
         else:
             inputs = self.tokenizer(query, padding=True, truncation=True,
                                     max_length=512, return_tensors='pt').to(self.device)
             with torch.no_grad():
                 outputs = self.model(**inputs)
-                query_embedding = self._mean_pooling(outputs, inputs['attention_mask']).cpu().numpy()
+                query_embedding = self.mean_pooling(outputs, inputs['attention_mask']).cpu().numpy()
 
-        # Нормализация векторов
         query_embedding = query_embedding / np.linalg.norm(query_embedding)
         doc_embeddings_norm = self.doc_embeddings / np.linalg.norm(self.doc_embeddings, axis=1, keepdims=True)
 
-        # Расчет косинусной схожести
         similarities = np.dot(query_embedding, doc_embeddings_norm.T)[0]
 
-        # Выбор топ-N результатов
         top_indices = np.argsort(similarities)[::-1][:top_n]
 
         return [(idx, similarities[idx]) for idx in top_indices if similarities[idx] > 0.1]
@@ -165,9 +156,8 @@ def run_search_app():
 
                     st.write(f"{rank}. **{filename}** (релевантность: {score:.4f})")
 
-                    # Показываем полный документ с возможностью развернуть/свернуть
                     with st.expander("Показать полный документ"):
-                        st.text(content[:10000])  # Ограничиваем вывод для производительности
+                        st.text(content[:10000])
 
 
 if __name__ == "__main__":
